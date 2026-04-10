@@ -5,6 +5,10 @@
   "use strict";
 
   const LS_SHUFFLE = "radioMidi_shuffle";
+  const LS_RECENT_SEARCHES = "radioMidi_recent_searches";
+  const SEARCH_DEBOUNCE_MS = 260;
+  const SEARCH_MAX_PER_SECTION = 8;
+  const RECENT_SEARCHES_MAX = 8;
   const HISTORY_MAX = 5;
   const PREV_RESTART_SEC = 3;
 
@@ -72,6 +76,21 @@
   };
 
   let songsCache = null;
+  let libraryLoadPromise = null;
+  const searchState = {
+    fullLibraryData: null,
+    filteredResults: { artists: [], albums: [], songs: [] },
+    query: "",
+    debounceTimer: null,
+    hlIndex: -1,
+    loadError: null,
+  };
+  const searchEls = {
+    input: null,
+    panel: null,
+    wrap: null,
+    clearBtn: null,
+  };
 
   /** Espectro (Web Audio) + modo página Live radio */
   const spectrum = {
@@ -1056,7 +1075,77 @@
     return r.json();
   }
 
+  function loadFullLibrary() {
+    if (libraryLoadPromise) return libraryLoadPromise;
+    libraryLoadPromise = (async function () {
+      try {
+        const [songsPayload, artistsPayload] = await Promise.all([
+          fetchJson("/songs"),
+          fetchJson("/artists"),
+        ]);
+        songsCache = songsPayload;
+        const songs = songsPayload.songs || [];
+        const artistNames = artistsPayload.artists || [];
+        const albumPayloads = await Promise.all(
+          artistNames.map(function (name) {
+            return fetchJson("/albums/" + encodeURIComponent(name)).catch(function () {
+              return { artist: name, albums: [], total_albums: 0 };
+            });
+          })
+        );
+        const byArtistAlbums = new Map();
+        albumPayloads.forEach(function (p) {
+          const a = p.artist || "";
+          byArtistAlbums.set(a, p.albums || []);
+        });
+        const albumsFlat = [];
+        artistNames.forEach(function (artist) {
+          const names = byArtistAlbums.get(artist) || [];
+          names.forEach(function (albumName) {
+            const trackCount = songs.filter(function (s) {
+              return s.folder_artist === artist && s.folder_album === albumName;
+            }).length;
+            albumsFlat.push({ artist: artist, name: albumName, trackCount: trackCount });
+          });
+        });
+        const artistRows = artistNames.map(function (name) {
+          const withArtist = songs.filter(function (s) {
+            return s.folder_artist === name;
+          });
+          const albumSet = new Set();
+          withArtist.forEach(function (s) {
+            if (s.folder_album) albumSet.add(s.folder_album);
+          });
+          return {
+            name: name,
+            songCount: withArtist.length,
+            albumCount: albumSet.size,
+          };
+        });
+        searchState.fullLibraryData = {
+          songs: songs,
+          artists: artistRows,
+          albums: albumsFlat,
+        };
+        searchState.loadError = null;
+        return searchState.fullLibraryData;
+      } catch (e) {
+        searchState.loadError = e;
+        searchState.fullLibraryData = null;
+        throw e;
+      }
+    })();
+    return libraryLoadPromise;
+  }
+
   async function getSongsData() {
+    if (libraryLoadPromise) {
+      try {
+        await libraryLoadPromise;
+      } catch (e) {
+        /* continua com fetch directo */
+      }
+    }
     if (!songsCache) songsCache = await fetchJson("/songs");
     return songsCache;
   }
@@ -1091,6 +1180,461 @@
     return d.innerHTML;
   }
 
+  function escapeRegex(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function highlightHtml(text, query) {
+    const t = String(text || "");
+    if (!query || !String(query).trim()) return escapeHtml(t);
+    const needle = String(query).trim();
+    const re = new RegExp(escapeRegex(needle), "gi");
+    let out = "";
+    let last = 0;
+    const s = t;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      out += escapeHtml(s.slice(last, m.index));
+      out += '<mark class="search-hl">' + escapeHtml(m[0]) + "</mark>";
+      last = re.lastIndex;
+      if (m[0] === "") {
+        re.lastIndex++;
+        if (re.lastIndex > s.length) break;
+      }
+    }
+    out += escapeHtml(s.slice(last));
+    return out;
+  }
+
+  function getRecentSearches() {
+    try {
+      const raw = localStorage.getItem(LS_RECENT_SEARCHES);
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr)
+        ? arr.filter(function (x) {
+            return typeof x === "string" && x.trim();
+          })
+        : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveRecentSearch(q) {
+    const t = String(q || "").trim();
+    if (t.length < 2) return;
+    const arr = getRecentSearches().filter(function (x) {
+      return x.toLowerCase() !== t.toLowerCase();
+    });
+    arr.unshift(t);
+    if (arr.length > RECENT_SEARCHES_MAX) arr.length = RECENT_SEARCHES_MAX;
+    try {
+      localStorage.setItem(LS_RECENT_SEARCHES, JSON.stringify(arr));
+    } catch (e) {
+      /* ignorar */
+    }
+  }
+
+  function hideSearchPanel() {
+    if (searchEls.panel) {
+      searchEls.panel.classList.add("hidden");
+      searchEls.panel.innerHTML = "";
+    }
+    if (searchEls.input) searchEls.input.setAttribute("aria-expanded", "false");
+    searchState.hlIndex = -1;
+  }
+
+  function showSearchPanel() {
+    if (searchEls.panel) searchEls.panel.classList.remove("hidden");
+    if (searchEls.input) searchEls.input.setAttribute("aria-expanded", "true");
+  }
+
+  function resetSearchUi() {
+    searchState.query = "";
+    if (searchState.debounceTimer) clearTimeout(searchState.debounceTimer);
+    searchState.debounceTimer = null;
+    if (searchEls.input) searchEls.input.value = "";
+    if (searchEls.clearBtn) searchEls.clearBtn.classList.add("hidden");
+    hideSearchPanel();
+  }
+
+  function updateClearVisibility() {
+    if (!searchEls.clearBtn || !searchEls.input) return;
+    searchEls.clearBtn.classList.toggle("hidden", !searchEls.input.value.trim());
+  }
+
+  function runSearchFilter() {
+    const q = searchState.query.trim();
+    const data = searchState.fullLibraryData;
+    if (!q || !data) {
+      searchState.filteredResults = { artists: [], albums: [], songs: [] };
+      return;
+    }
+    const ql = q.toLowerCase();
+    const mx = SEARCH_MAX_PER_SECTION;
+    const fa = data.artists
+      .filter(function (a) {
+        return a.name.toLowerCase().indexOf(ql) !== -1;
+      })
+      .slice(0, mx);
+    const fal = data.albums
+      .filter(function (al) {
+        return al.name.toLowerCase().indexOf(ql) !== -1 || al.artist.toLowerCase().indexOf(ql) !== -1;
+      })
+      .slice(0, mx);
+    const fs = data.songs
+      .filter(function (s) {
+        const title = ((s.title || s.filename || "") + "").toLowerCase();
+        const art = ((s.artist || "") + "").toLowerCase();
+        const fa_ = ((s.folder_artist || "") + "").toLowerCase();
+        const al_ = ((s.folder_album || "") + "").toLowerCase();
+        return (
+          title.indexOf(ql) !== -1 ||
+          art.indexOf(ql) !== -1 ||
+          fa_.indexOf(ql) !== -1 ||
+          al_.indexOf(ql) !== -1
+        );
+      })
+      .slice(0, mx);
+    searchState.filteredResults = { artists: fa, albums: fal, songs: fs };
+  }
+
+  function songDisplayTitle(s) {
+    return (s.title && String(s.title).trim()) || s.filename || "";
+  }
+
+  function playSongFromSearch(song) {
+    const data = searchState.fullLibraryData;
+    const allSongs = data && data.songs ? data.songs : null;
+    if (!allSongs) return;
+    const tracks = sortTracks(
+      allSongs.filter(function (s) {
+        return s.folder_artist === song.folder_artist && s.folder_album === song.folder_album;
+      })
+    );
+    if (tracks.length) {
+      let idx = -1;
+      for (let i = 0; i < tracks.length; i++) {
+        if (tracks[i].relative_path === song.relative_path) {
+          idx = i;
+          break;
+        }
+      }
+      if (idx < 0) idx = 0;
+      const sk = "radio:album:" + (song.folder_artist || "") + "/" + (song.folder_album || "");
+      playTrackListAt(tracks, idx, {
+        sub: (song.folder_artist || "") + " · " + (song.folder_album || ""),
+        sourceKey: sk,
+        mode: "album",
+        artistName: song.folder_artist,
+        albumName: song.folder_album,
+        coverArtist: song.folder_artist,
+        coverAlbum: song.folder_album,
+      });
+    } else {
+      playTrackListAt([song], 0, {
+        sub: song.folder_artist || "",
+        sourceKey: "file:" + song.relative_path,
+        mode: "file",
+        artistName: song.folder_artist,
+        albumName: song.folder_album,
+        coverArtist: song.folder_artist,
+        coverAlbum: song.folder_album,
+      });
+    }
+  }
+
+  function updateSearchHitsActive() {
+    if (!searchEls.panel) return;
+    const hits = searchEls.panel.querySelectorAll(".search-hit");
+    hits.forEach(function (h, i) {
+      h.classList.toggle("is-active", i === searchState.hlIndex);
+    });
+    if (searchState.hlIndex >= 0 && hits[searchState.hlIndex]) {
+      hits[searchState.hlIndex].scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
+
+  function onSearchPanelClick(ev) {
+    const chip = ev.target.closest(".search-recent-chip");
+    if (chip) {
+      const raw = chip.getAttribute("data-recent");
+      if (raw) {
+        let term = raw;
+        try {
+          term = decodeURIComponent(raw);
+        } catch (e) {
+          /* usar raw */
+        }
+        searchEls.input.value = term;
+        searchState.query = term;
+        updateClearVisibility();
+        if (searchState.debounceTimer) clearTimeout(searchState.debounceTimer);
+        renderSearchPanel();
+        searchEls.input.focus();
+      }
+      return;
+    }
+    const btn = ev.target.closest(".search-hit");
+    if (!btn) return;
+    const kind = btn.getAttribute("data-kind");
+    const qTrim = searchState.query.trim();
+    if (kind === "artist") {
+      const name = btn.getAttribute("data-name");
+      if (name) {
+        saveRecentSearch(qTrim || name);
+        resetSearchUi();
+        renderArtistDetail(name);
+      }
+      return;
+    }
+    if (kind === "album") {
+      const art = btn.getAttribute("data-artist");
+      const alb = btn.getAttribute("data-album");
+      if (art && alb) {
+        if (qTrim) saveRecentSearch(qTrim);
+        resetSearchUi();
+        renderAlbumDetail(art, alb, "albums");
+      }
+      return;
+    }
+    if (kind === "song") {
+      const rp = btn.getAttribute("data-path");
+      if (!rp || !searchState.fullLibraryData) return;
+      const song = searchState.fullLibraryData.songs.find(function (s) {
+        return s.relative_path === rp;
+      });
+      if (song) {
+        if (qTrim) saveRecentSearch(qTrim);
+        resetSearchUi();
+        playSongFromSearch(song);
+      }
+    }
+  }
+
+  function renderSearchPanel() {
+    if (!searchEls.panel || !searchEls.input) return;
+
+    if (!searchState.fullLibraryData && !searchState.loadError) {
+      showSearchPanel();
+      searchEls.panel.innerHTML =
+        '<div class="search-panel-inner"><p class="search-panel-loading">A carregar biblioteca…</p></div>';
+      return;
+    }
+
+    if (searchState.loadError && !searchState.fullLibraryData) {
+      showSearchPanel();
+      searchEls.panel.innerHTML =
+        '<div class="search-panel-inner"><p class="search-panel-empty">Não foi possível carregar a biblioteca.</p></div>';
+      return;
+    }
+
+    const data = searchState.fullLibraryData;
+    const qt = searchState.query.trim();
+    let flatIdx = 0;
+
+    if (!qt) {
+      const parts = [];
+      const recent = getRecentSearches();
+      if (recent.length) {
+        let chips = "";
+        recent.forEach(function (term) {
+          chips +=
+            '<button type="button" class="search-recent-chip" data-recent="' +
+            encodeURIComponent(term) +
+            '">' +
+            escapeHtml(term) +
+            "</button>";
+        });
+        parts.push(
+          '<div class="search-panel-inner"><p class="search-section-title">Recentes</p><div class="search-recent-wrap">' +
+            chips +
+            "</div></div>"
+        );
+      }
+      let hasHits = false;
+      if (data && data.artists.length) {
+        const top = data.artists
+          .slice()
+          .sort(function (a, b) {
+            return b.songCount - a.songCount || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+          })
+          .slice(0, SEARCH_MAX_PER_SECTION);
+        let body = '<div class="search-panel-inner"><p class="search-section-title">🎤 Top artists</p>';
+        top.forEach(function (a) {
+          hasHits = true;
+          const ix = flatIdx++;
+          body +=
+            '<button type="button" class="search-hit" data-kind="artist" data-name="' +
+            escapeHtml(a.name) +
+            '" data-flat-index="' +
+            ix +
+            '"><span class="search-hit-ico" aria-hidden="true">🎤</span><div class="search-hit-meta"><span class="search-hit-title">' +
+            escapeHtml(a.name) +
+            '</span><span class="search-hit-sub">' +
+            a.songCount +
+            " faixas · " +
+            a.albumCount +
+            " álbuns</span></div></button>";
+        });
+        body += "</div>";
+        parts.push(body);
+      }
+      if (parts.length) {
+        showSearchPanel();
+        searchEls.panel.innerHTML = parts.join("");
+        searchState.hlIndex = hasHits ? 0 : -1;
+        requestAnimationFrame(updateSearchHitsActive);
+      } else {
+        hideSearchPanel();
+      }
+      return;
+    }
+
+    runSearchFilter();
+    const fr = searchState.filteredResults;
+    const hasAny = fr.artists.length + fr.albums.length + fr.songs.length > 0;
+    showSearchPanel();
+    if (!hasAny) {
+      searchEls.panel.innerHTML =
+        '<div class="search-panel-inner"><p class="search-panel-empty">No results found</p></div>';
+      searchState.hlIndex = -1;
+      return;
+    }
+
+    let html = '<div class="search-panel-inner">';
+    if (fr.artists.length) {
+      html += '<p class="search-section-title">🎤 Artists</p>';
+      fr.artists.forEach(function (a) {
+        const ix = flatIdx++;
+        html +=
+          '<button type="button" class="search-hit" data-kind="artist" data-name="' +
+          escapeHtml(a.name) +
+          '" data-flat-index="' +
+          ix +
+          '"><span class="search-hit-ico" aria-hidden="true">🎤</span><div class="search-hit-meta"><span class="search-hit-title">' +
+          highlightHtml(a.name, qt) +
+          '</span><span class="search-hit-sub">' +
+          a.songCount +
+          " songs · " +
+          a.albumCount +
+          " albums</span></div></button>";
+      });
+    }
+    if (fr.albums.length) {
+      html += '<p class="search-section-title">💿 Albums</p>';
+      fr.albums.forEach(function (al) {
+        const ix = flatIdx++;
+        html +=
+          '<button type="button" class="search-hit" data-kind="album" data-artist="' +
+          escapeHtml(al.artist) +
+          '" data-album="' +
+          escapeHtml(al.name) +
+          '" data-flat-index="' +
+          ix +
+          '"><span class="search-hit-ico" aria-hidden="true">💿</span><div class="search-hit-meta"><span class="search-hit-title">' +
+          highlightHtml(al.name, qt) +
+          '</span><span class="search-hit-sub">' +
+          highlightHtml(al.artist, qt) +
+          " · " +
+          al.trackCount +
+          " tracks</span></div></button>";
+      });
+    }
+    if (fr.songs.length) {
+      html += '<p class="search-section-title">🎵 Songs</p>';
+      fr.songs.forEach(function (s) {
+        const ix = flatIdx++;
+        const title = songDisplayTitle(s);
+        const subParts = [];
+        if (s.artist) subParts.push(s.artist);
+        else if (s.folder_artist) subParts.push(s.folder_artist);
+        if (s.folder_album) subParts.push(s.folder_album);
+        const sub = subParts.join(" · ");
+        html +=
+          '<button type="button" class="search-hit" data-kind="song" data-path="' +
+          escapeHtml(s.relative_path) +
+          '" data-flat-index="' +
+          ix +
+          '"><span class="search-hit-ico" aria-hidden="true">🎵</span><div class="search-hit-meta"><span class="search-hit-title">' +
+          highlightHtml(title, qt) +
+          '</span><span class="search-hit-sub">' +
+          highlightHtml(sub, qt) +
+          "</span></div></button>";
+      });
+    }
+    html += '<p class="search-panel-hint">↑↓ navegar · Enter abrir · Esc fechar</p></div>';
+    searchEls.panel.innerHTML = html;
+    searchState.hlIndex = flatIdx > 0 ? 0 : -1;
+    requestAnimationFrame(updateSearchHitsActive);
+  }
+
+  function initGlobalSearch() {
+    searchEls.input = document.getElementById("global-search");
+    searchEls.panel = document.getElementById("search-panel");
+    searchEls.wrap = document.getElementById("main-search-wrap");
+    searchEls.clearBtn = document.getElementById("global-search-clear");
+    if (!searchEls.input || !searchEls.panel || !searchEls.wrap) return;
+
+    searchEls.panel.addEventListener("click", onSearchPanelClick);
+
+    searchEls.input.addEventListener("focus", function () {
+      renderSearchPanel();
+    });
+
+    searchEls.input.addEventListener("input", function () {
+      searchState.query = searchEls.input.value;
+      searchState.hlIndex = -1;
+      updateClearVisibility();
+      if (searchState.debounceTimer) clearTimeout(searchState.debounceTimer);
+      searchState.debounceTimer = setTimeout(function () {
+        searchState.query = searchEls.input.value;
+        renderSearchPanel();
+      }, SEARCH_DEBOUNCE_MS);
+    });
+
+    if (searchEls.clearBtn) {
+      searchEls.clearBtn.addEventListener("click", function () {
+        searchEls.input.value = "";
+        searchState.query = "";
+        updateClearVisibility();
+        renderSearchPanel();
+        searchEls.input.focus();
+      });
+    }
+
+    searchEls.input.addEventListener("keydown", function (ev) {
+      if (!searchEls.panel || searchEls.panel.classList.contains("hidden")) return;
+      const hits = searchEls.panel.querySelectorAll(".search-hit");
+      if (ev.key === "ArrowDown") {
+        if (!hits.length) return;
+        ev.preventDefault();
+        searchState.hlIndex = (searchState.hlIndex + 1) % hits.length;
+        updateSearchHitsActive();
+      } else if (ev.key === "ArrowUp") {
+        if (!hits.length) return;
+        ev.preventDefault();
+        searchState.hlIndex = searchState.hlIndex <= 0 ? hits.length - 1 : searchState.hlIndex - 1;
+        updateSearchHitsActive();
+      } else if (ev.key === "Enter") {
+        if (hits.length && searchState.hlIndex >= 0 && hits[searchState.hlIndex]) {
+          ev.preventDefault();
+          hits[searchState.hlIndex].click();
+        }
+      } else if (ev.key === "Escape") {
+        hideSearchPanel();
+        searchEls.input.blur();
+      }
+    });
+
+    document.addEventListener("click", function (ev) {
+      if (!searchEls.wrap || !searchEls.panel || searchEls.panel.classList.contains("hidden")) return;
+      if (!searchEls.wrap.contains(ev.target)) {
+        hideSearchPanel();
+      }
+    });
+  }
+
   function renderHome() {
     exitRadioVisualMode();
     closeDrawer();
@@ -1117,6 +1661,7 @@
       });
     };
     document.getElementById("home-artists").onclick = function () {
+      resetSearchUi();
       renderArtists();
     };
   }
@@ -1514,6 +2059,7 @@
   }
 
   function navigate(view) {
+    resetSearchUi();
     if (view === "home") renderHome();
     else if (view === "artists") renderArtists();
     else if (view === "albums") renderAlbums();
@@ -1536,5 +2082,9 @@
   setNpmPlayingUi(false);
   setTransportLocked(false);
 
+  initGlobalSearch();
+  loadFullLibrary().finally(function () {
+    if (searchEls.input && document.activeElement === searchEls.input) renderSearchPanel();
+  });
   renderHome();
 })();

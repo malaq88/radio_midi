@@ -89,6 +89,30 @@
           </div>
         </div>
       </header>
+
+      <div class="main-search-wrap" id="main-search-wrap">
+        <label class="visually-hidden" for="global-search">Pesquisar músicas, artistas e álbuns</label>
+        <div class="search-field-inner">
+          <span class="search-field-icon" aria-hidden="true">⌕</span>
+          <input
+            type="search"
+            id="global-search"
+            class="global-search-input"
+            placeholder="Search songs, artists, albums..."
+            autocomplete="off"
+            spellcheck="false"
+            enterkeyhint="search"
+            aria-autocomplete="list"
+            aria-controls="search-panel"
+            aria-expanded="false"
+          />
+          <button type="button" id="global-search-clear" class="search-clear-btn hidden" aria-label="Limpar pesquisa">
+            ×
+          </button>
+        </div>
+        <div id="search-panel" class="search-panel hidden" role="region" aria-label="Resultados da pesquisa"></div>
+      </div>
+
       <div id="content" class="content"></div>
     </main>
   </div>
