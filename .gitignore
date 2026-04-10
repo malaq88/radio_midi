@@ -25,9 +25,8 @@ build/
 .ruff_cache/
 .hypothesis/
 
-# IDEs e SO
+# IDEs e SO (acrescenta .vscode/ se não quiseres versionar config do VS Code/Cursor)
 .idea/
-.vscode/
 *.swp
 *~
 .DS_Store
