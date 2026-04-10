@@ -114,23 +114,42 @@
           <button
             type="button"
             id="btn-shuffle"
-            class="btn-transport btn-shuffle"
+            class="btn-transport btn-transport--aux btn-shuffle"
             aria-label="Modo aleatório"
             aria-pressed="true"
             title="Aleatório / ordem fixa"
           >
-            <span aria-hidden="true">🔀</span>
+            <svg class="transport-svg transport-svg--shuffle" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m18 14 4 4-4 4" />
+              <path d="M2 18h1.92a4 4 0 0 0 3.31-1.7l5.37-8.52a4 4 0 0 1 3.3-1.7H22" />
+              <path d="m18 2 4 4-4 4" />
+              <path d="M2 6h1.92a4 4 0 0 1 3.37 1.86l5.37 8.18A4 4 0 0 0 15.57 18H22" />
+            </svg>
           </button>
-          <button type="button" id="btn-prev" class="btn-transport btn-prev" aria-label="Anterior ou reiniciar">
-            <span class="transport-icon" aria-hidden="true">⏮</span>
-          </button>
-          <button type="button" id="btn-play" class="btn-play" aria-label="Reproduzir ou pausar">
-            <span id="icon-play" class="play-icon">▶</span>
-            <span id="icon-pause" class="play-icon hidden">⏸</span>
-          </button>
-          <button type="button" id="btn-next" class="btn-transport btn-next" aria-label="Seguinte">
-            <span class="transport-icon" aria-hidden="true">⏭</span>
-          </button>
+          <div class="player-transport-core">
+            <button type="button" id="btn-prev" class="btn-transport btn-skip" aria-label="Anterior ou reiniciar">
+              <svg class="transport-svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <rect x="5" y="5" width="2.75" height="14" rx="0.5" />
+                <path d="M10.5 6.2v11.6L19.5 12 10.5 6.2z" />
+              </svg>
+            </button>
+            <button type="button" id="btn-play" class="btn-play" aria-label="Reproduzir ou pausar">
+              <span id="icon-play" class="play-icon" aria-hidden="true">
+                <svg class="play-icon-svg" viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5.82v12.36L18.18 12 8 5.82z" /></svg>
+              </span>
+              <span id="icon-pause" class="play-icon hidden" aria-hidden="true">
+                <svg class="play-icon-svg" viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+                  <path d="M6 5h4.25v14H6V5zm7.75 0H18v14h-4.25V5z" />
+                </svg>
+              </span>
+            </button>
+            <button type="button" id="btn-next" class="btn-transport btn-skip" aria-label="Seguinte">
+              <svg class="transport-svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M4.5 6.2L13.5 12l-9 5.8V6.2z" />
+                <rect x="16.25" y="5" width="2.75" height="14" rx="0.5" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="progress-wrap">
           <div id="progress-bar" class="progress-bar">
