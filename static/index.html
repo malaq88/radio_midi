@@ -37,12 +37,32 @@
           <span class="nav-label">Artistas</span>
         </button>
         <button type="button" class="nav-item" data-view="albums" data-nav title="Álbuns">
-          <span class="nav-icon" aria-hidden="true">▣</span>
+          <span class="nav-icon nav-icon--svg" aria-hidden="true">
+            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.35" />
+              <circle cx="12" cy="12" r="6.25" stroke="currentColor" stroke-width="0.85" opacity="0.4" />
+              <circle cx="12" cy="12" r="3.25" stroke="currentColor" stroke-width="0.75" opacity="0.55" />
+            </svg>
+          </span>
           <span class="nav-label">Álbuns</span>
         </button>
-        <button type="button" class="nav-item" data-view="radio" data-nav title="Rádio aleatória">
-          <span class="nav-icon" aria-hidden="true">📻</span>
-          <span class="nav-label">Rádio aleatória</span>
+        <button type="button" class="nav-item" data-view="radio" data-nav title="Random · stream contínuo">
+          <span class="nav-icon nav-icon--svg" aria-hidden="true">
+            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path
+                fill="none"
+                d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 1 0 0-8c-2 0-4 1.33-6 4Z"
+                stroke="currentColor"
+                stroke-width="1.35"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </span>
+          <span class="nav-label">Random</span>
+        </button>
+        <button type="button" class="nav-item" data-view="radio-visual" data-nav title="Live radio">
+          <span class="nav-icon" aria-hidden="true">〰</span>
+          <span class="nav-label">Live radio</span>
         </button>
       </nav>
       <div class="sidebar-footer">
@@ -130,7 +150,7 @@
             <button type="button" id="btn-prev" class="btn-transport btn-skip" aria-label="Anterior ou reiniciar">
               <svg class="transport-svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <rect x="5" y="5" width="2.75" height="14" rx="0.5" />
-                <path d="M10.5 6.2v11.6L19.5 12 10.5 6.2z" />
+                <path d="M19.5 6.2L10.5 12l9 5.8V6.2z" />
               </svg>
             </button>
             <button type="button" id="btn-play" class="btn-play" aria-label="Reproduzir ou pausar">
@@ -151,7 +171,7 @@
             </button>
           </div>
         </div>
-        <div class="progress-wrap">
+        <div class="progress-wrap progress-wrap--default" id="progress-wrap-default">
           <div id="progress-bar" class="progress-bar">
             <div id="progress-fill" class="progress-fill"></div>
             <div id="progress-indeterminate" class="progress-indeterminate hidden"></div>
@@ -160,6 +180,10 @@
             <span id="time-current">—:—</span>
             <span id="time-total">—:—</span>
           </div>
+        </div>
+        <div class="player-spectrum-strip hidden" id="player-spectrum-strip" aria-hidden="false">
+          <span class="player-spectrum-brand">Radio MIDI</span>
+          <canvas id="spectrum-canvas-footer" class="spectrum-canvas spectrum-canvas--footer" width="320" height="36"></canvas>
         </div>
       </div>
 

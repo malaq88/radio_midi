@@ -5,6 +5,8 @@ Ponto de entrada FastAPI: lifespan carrega a biblioteca; rotas em `app.routes`.
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 import sys
 from contextlib import asynccontextmanager
 
@@ -14,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import DEVICE_PLAYLIST_MAP, settings
+from app.config import DEVICE_PLAYLIST_MAP, PROJECT_ROOT, settings
 from app.routes import api_router
 from app.services.library import MusicLibrary
 
@@ -61,7 +63,32 @@ async def lifespan(app: FastAPI):
     library.scan()
     app.state.library = library
 
+    radio_proc: subprocess.Popen | None = None
+    if settings.radio_live_autostart:
+        env = os.environ.copy()
+        radio_proc = subprocess.Popen(
+            [sys.executable, "-m", "app.services.radio_generator"],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=None,
+            stderr=None,
+        )
+        app.state.radio_live_subprocess = radio_proc
+        log.info(
+            "Rádio live autostart: subprocess pid=%s (python -m app.services.radio_generator)",
+            radio_proc.pid,
+        )
+
     yield
+
+    if radio_proc is not None:
+        log.info("A terminar subprocess da rádio live (pid=%s).", radio_proc.pid)
+        radio_proc.terminate()
+        try:
+            radio_proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            radio_proc.kill()
+            radio_proc.wait(timeout=3)
 
     log.info("Encerrando aplicação.")
 

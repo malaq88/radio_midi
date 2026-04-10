@@ -130,5 +130,29 @@ class Settings(BaseSettings):
             return None
         return v
 
+    # Rádio 24/7 (FFmpeg): processo separado em app.services.radio_generator
+    radio_live_bind_host: str = Field(
+        default="127.0.0.1",
+        description="Host do mini-servidor HTTP do gerador (só escutar em 0.0.0.0 se souber o que faz).",
+    )
+    radio_live_bind_port: int = Field(
+        default=9000,
+        ge=1,
+        le=65535,
+        description="Porta do gerador de rádio contínua (FFmpeg → HTTP).",
+    )
+    radio_live_stream_url: str = Field(
+        default="http://127.0.0.1:9000/stream",
+        description="URL que o FastAPI usa para proxy em GET /radio/live.",
+    )
+    radio_live_status_url: str = Field(
+        default="http://127.0.0.1:9000/status",
+        description="URL JSON de estado do gerador (GET /radio/live/status no API).",
+    )
+    radio_live_autostart: bool = Field(
+        default=False,
+        description="Se true, o lifespan arranca subprocess python -m app.services.radio_generator.",
+    )
+
 
 settings = Settings()

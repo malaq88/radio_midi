@@ -6,6 +6,7 @@ Serviço HTTP de **streaming contínuo** de arquivos `.mp3` para vários cliente
 
 - Python **3.11+**
 - Pasta com arquivos `.mp3` (veja estrutura abaixo)
+- **FFmpeg** no `PATH` (com `libmp3lame`) — apenas para a **rádio live 24/7** opcional (`/radio/live`)
 
 ## Instalação
 
@@ -66,28 +67,85 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - Documentação interativa: `http://127.0.0.1:8000/docs`
 - Saúde: `GET /health`
 
+### Rádio live 24/7 (um único stream, estilo emissora)
+
+O endpoint `GET /radio/live` **não** gera áudio dentro do FastAPI: faz *proxy* para um processo separado que corre **FFmpeg** e um mini-servidor HTTP em `127.0.0.1:9000`.
+
+1. **Terminal 1 — gerador** (deixa a correr; mesmo sem clientes o FFmpeg continua no ar):
+
+   ```bash
+   cd /caminho/para/radio_midi
+   source .venv/bin/activate
+   python3 -m app.services.radio_generator
+   ```
+
+2. **Terminal 2 — API** (como habitual):
+
+   ```bash
+   uvicorn app.main:app --host 0.0.0.0 --port 8000
+   ```
+
+3. Ouvir a mesma emissão que todos os outros clientes:
+
+   ```bash
+   curl -N "http://127.0.0.1:8000/radio/live" -o /dev/null
+   ```
+
+Estado do gerador (faixa estimada, clientes, ciclos FFmpeg): `GET /radio/live/status`
+
+Variáveis úteis (`.env` ou ambiente):
+
+| Variável | Efeito |
+|----------|--------|
+| `RADIO_LIVE_BIND_HOST` | Host do gerador (padrão `127.0.0.1`). |
+| `RADIO_LIVE_BIND_PORT` | Porta do gerador (padrão `9000`). |
+| `RADIO_LIVE_STREAM_URL` | URL que o FastAPI usa para proxy (padrão `http://127.0.0.1:9000/stream`). |
+| `RADIO_LIVE_STATUS_URL` | JSON de estado (padrão `http://127.0.0.1:9000/status`). |
+| `RADIO_LIVE_AUTOSTART` | Se `true`, o lifespan do FastAPI arranca `python3 -m app.services.radio_generator` como subprocess (útil em dev; em produção prefira systemd/supervisor). |
+
+## Comandos úteis (raiz do projeto)
+
+Com o **venv ativo** (`source .venv/bin/activate`) e **à partir da pasta que contém `app/`** (a raiz do repositório):
+
+| Objetivo | Comando |
+|----------|---------|
+| **Servidor** (API + interface web) | `uvicorn app.main:app --host 0.0.0.0 --port 8000` |
+| **Rádio live 24/7** (FFmpeg; processo separado do FastAPI) | `python3 -m app.services.radio_generator` |
+| **Pasta de música** — criar `MUSIC_DIR`, relatório de `.mp3` por grupo, listar soltos na raiz | `python3 -m music_organize` |
+| Garantir só que `MUSIC_DIR` existe | `python3 -m music_organize --init` |
+| Mover `.mp3` da raiz de `MUSIC_DIR` para uma subpasta (ex. após copiar/colar) | `python3 -m music_organize --move-loose inbox` (usa `--dry-run` para simular) |
+| **Reorganizar** ficheiros já na biblioteca para `{Artista}/{Álbum}/…` (tags ID3) | `python3 scripts/reorganize_music.py` (opção `--music-dir /caminho`) |
+| **Saúde** da API | `curl -s http://127.0.0.1:8000/health` |
+| **Teste** de stream aleatório | `curl -N -H "Accept: audio/mpeg" "http://127.0.0.1:8000/radio/random" -o /dev/null` |
+| **Documentação** interativa (OpenAPI) | Abrir `http://127.0.0.1:8000/docs` no browser |
+| **FFmpeg** instalado? (necessário para o gerador live) | `ffmpeg -version` |
+
+O utilitário `music_organize` está em `utils/music_organize/`; o módulo `music_organize` na raiz existe para poder correr `python3 -m music_organize`. Usa as mesmas regras de `MUSIC_DIR` que `app.config` (`.env` ou pasta `music/` por defeito).
+
 ### Reorganizar músicas já existentes (Artista / Álbum)
 
 Para mover todos os `.mp3` que já estão em `MUSIC_DIR` para a mesma árvore que os uploads (`{Artista}/{Álbum}/{NN} - {Título}.mp3`), na raiz do projeto:
 
 ```bash
 source .venv/bin/activate
-python scripts/reorganize_music.py
+python3 scripts/reorganize_music.py
 ```
 
 Outra pasta (ex. `/music` no sistema):
 
 ```bash
-python scripts/reorganize_music.py --music-dir /music
+python3 scripts/reorganize_music.py --music-dir /music
 ```
 
-Use `--overwrite` para substituir ficheiros/capas no destino. O script usa as mesmas tags ID3 e regras que o upload.
+Use `--overwrite` para substituir ficheiros/capas no destino. O script usa as mesmas tags ID3 e regras que o upload. Para **só inspecionar** a pasta ou **mover ficheiros soltos** na raiz para uma subpasta manualmente, usa `python3 -m music_organize` (secção **Comandos úteis** acima).
 
 ## Endpoints principais
 
 | Método | Caminho | Descrição |
 |--------|---------|-----------|
 | GET | `/` | Página web (reprodutor HTML5, rádio e lista de músicas) |
+| GET | `/radio/live` | **Proxy** do stream único 24/7 (FFmpeg noutro processo); todos ouvem o mesmo sinal; requer gerador a correr |
+| GET | `/radio/live/status` | JSON do gerador (faixa estimada, clientes, erros) |
 | GET | `/radio/random` | Rádio contínua: shuffle (evita repetir as últimas 5 faixas por ligação), sem fechar a conexão |
 | GET | `/radio/device/{device_id}` | Stream por dispositivo (shuffle como acima) |
 | GET | `/radio/artist/{artist_name}` | Todas as faixas do artista (1.ª pasta); shuffle contínuo; **404** se não existir |
@@ -168,5 +226,9 @@ app/
   deps.py           # Dependências (biblioteca)
   models/           # Song, DTOs de API
   routes/           # radio, songs
-  services/         # library (scan), stream (gerador assíncrono)
+  services/         # library (scan), stream (gerador assíncrono), radio_generator (FFmpeg 24/7)
+utils/
+  music_organize/   # CLI: python3 -m music_organize (atalho: music_organize/ na raiz)
+scripts/
+  reorganize_music.py
 ```

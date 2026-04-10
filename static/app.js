@@ -73,6 +73,173 @@
 
   let songsCache = null;
 
+  /** Espectro (Web Audio) + modo página Live radio */
+  const spectrum = {
+    audioCtx: null,
+    analyser: null,
+    sourceNode: null,
+    wired: false,
+    dataArray: null,
+    rafId: null,
+    mainCtx: null,
+    footerCtx: null,
+    mainCanvas: null,
+    footerCanvas: null,
+    barPeaks: null,
+    barCount: 48,
+  };
+
+  function exitRadioVisualMode() {
+    if (!els.body) return;
+    els.body.classList.remove("page-radio-visual");
+    const d = document.getElementById("progress-wrap-default");
+    const s = document.getElementById("player-spectrum-strip");
+    if (d) d.classList.remove("hidden");
+    if (s) s.classList.add("hidden");
+    stopSpectrumAnimation();
+  }
+
+  function enterRadioVisualMode() {
+    if (!els.body) return;
+    els.body.classList.add("page-radio-visual");
+    const d = document.getElementById("progress-wrap-default");
+    const s = document.getElementById("player-spectrum-strip");
+    if (d) d.classList.add("hidden");
+    if (s) s.classList.remove("hidden");
+  }
+
+  function wireAudioAnalyser() {
+    if (spectrum.wired) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !els.audio) return;
+    spectrum.audioCtx = new AC();
+    spectrum.analyser = spectrum.audioCtx.createAnalyser();
+    spectrum.analyser.fftSize = 512;
+    spectrum.analyser.smoothingTimeConstant = 0.62;
+    spectrum.analyser.minDecibels = -88;
+    spectrum.analyser.maxDecibels = -22;
+    spectrum.sourceNode = spectrum.audioCtx.createMediaElementSource(els.audio);
+    spectrum.sourceNode.connect(spectrum.analyser);
+    spectrum.analyser.connect(spectrum.audioCtx.destination);
+    spectrum.dataArray = new Uint8Array(spectrum.analyser.frequencyBinCount);
+    spectrum.wired = true;
+  }
+
+  function resumeAudioContextIfNeeded() {
+    if (spectrum.audioCtx && spectrum.audioCtx.state === "suspended") {
+      spectrum.audioCtx.resume().catch(function () {});
+    }
+  }
+
+  function setupSpectrumCanvases() {
+    spectrum.mainCanvas = document.getElementById("spectrum-canvas-main");
+    spectrum.footerCanvas = document.getElementById("spectrum-canvas-footer");
+    if (spectrum.mainCanvas) resizeSpectrumCanvas(spectrum.mainCanvas);
+    if (spectrum.footerCanvas) resizeSpectrumCanvas(spectrum.footerCanvas);
+    spectrum.mainCtx = spectrum.mainCanvas ? spectrum.mainCanvas.getContext("2d") : null;
+    spectrum.footerCtx = spectrum.footerCanvas ? spectrum.footerCanvas.getContext("2d") : null;
+    if (!spectrum.barPeaks || spectrum.barPeaks.length !== spectrum.barCount) {
+      spectrum.barPeaks = new Float32Array(spectrum.barCount);
+    }
+  }
+
+  function resizeSpectrumCanvas(canvas) {
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || 320;
+    const h = canvas.clientHeight || 120;
+    canvas.width = Math.max(1, Math.floor(w * dpr));
+    canvas.height = Math.max(1, Math.floor(h * dpr));
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function drawBarsOnCanvas(ctx2d, canvas, barCount, paused) {
+    if (!ctx2d || !canvas) return;
+    const w = canvas.clientWidth || 1;
+    const h = canvas.clientHeight || 1;
+    ctx2d.clearRect(0, 0, w, h);
+    const gap = Math.max(1.5, (w / barCount) * 0.18);
+    const barW = (w - gap * (barCount + 1)) / barCount;
+    let x0 = gap;
+    for (let i = 0; i < barCount; i++) {
+      let amp = spectrum.barPeaks[i] || 0;
+      if (paused) amp *= 0.92;
+      const barH = Math.max(2, amp * h * 0.94);
+      const x = x0 + i * (barW + gap);
+      const y = h - barH;
+      const grad = ctx2d.createLinearGradient(x, y, x, h);
+      grad.addColorStop(0, "#1ed760");
+      grad.addColorStop(0.45, "#1db954");
+      grad.addColorStop(1, "rgba(29, 185, 84, 0.25)");
+      ctx2d.fillStyle = grad;
+      const r = Math.min(barW / 2, 5);
+      ctx2d.beginPath();
+      ctx2d.moveTo(x + r, y);
+      ctx2d.lineTo(x + barW - r, y);
+      ctx2d.quadraticCurveTo(x + barW, y, x + barW, y + r);
+      ctx2d.lineTo(x + barW, h);
+      ctx2d.lineTo(x, h);
+      ctx2d.lineTo(x, y + r);
+      ctx2d.quadraticCurveTo(x, y, x + r, y);
+      ctx2d.closePath();
+      ctx2d.fill();
+    }
+  }
+
+  function spectrumTick() {
+    if (!spectrum.barPeaks || spectrum.barPeaks.length !== spectrum.barCount) {
+      spectrum.barPeaks = new Float32Array(spectrum.barCount);
+    }
+    const barCount = spectrum.barCount;
+    const paused = els.audio && els.audio.paused;
+    if (spectrum.analyser && spectrum.dataArray && !paused) {
+      spectrum.analyser.getByteFrequencyData(spectrum.dataArray);
+      const bins = spectrum.dataArray.length;
+      const chunk = Math.max(1, Math.floor(bins / barCount));
+      for (let b = 0; b < barCount; b++) {
+        let sum = 0;
+        const start = b * chunk;
+        const end = Math.min(start + chunk, bins);
+        for (let i = start; i < end; i++) sum += spectrum.dataArray[i];
+        const avg = sum / (end - start) / 255;
+        const target = Math.pow(avg, 0.68);
+        const prev = spectrum.barPeaks[b] || 0;
+        spectrum.barPeaks[b] = Math.max(prev * 0.78, target);
+      }
+    } else if (spectrum.barPeaks) {
+      for (let j = 0; j < barCount; j++) {
+        spectrum.barPeaks[j] = (spectrum.barPeaks[j] || 0) * 0.88;
+      }
+    }
+    drawBarsOnCanvas(spectrum.mainCtx, spectrum.mainCanvas, barCount, paused);
+    drawBarsOnCanvas(spectrum.footerCtx, spectrum.footerCanvas, barCount, paused);
+    spectrum.rafId = requestAnimationFrame(spectrumTick);
+  }
+
+  function startSpectrumAnimation() {
+    if (spectrum.rafId) return;
+    spectrum.rafId = requestAnimationFrame(spectrumTick);
+  }
+
+  function stopSpectrumAnimation() {
+    if (spectrum.rafId) {
+      cancelAnimationFrame(spectrum.rafId);
+      spectrum.rafId = null;
+    }
+  }
+
+  function onWindowResizeSpectrum() {
+    if (!els.body.classList.contains("page-radio-visual")) return;
+    resizeSpectrumCanvas(spectrum.mainCanvas);
+    resizeSpectrumCanvas(spectrum.footerCanvas);
+    spectrum.mainCtx = spectrum.mainCanvas ? spectrum.mainCanvas.getContext("2d") : null;
+    spectrum.footerCtx = spectrum.footerCanvas ? spectrum.footerCanvas.getContext("2d") : null;
+    const dpr = window.devicePixelRatio || 1;
+    if (spectrum.mainCtx) spectrum.mainCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (spectrum.footerCtx) spectrum.footerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
   function loadShufflePreference() {
     try {
       const v = localStorage.getItem(LS_SHUFFLE);
@@ -264,7 +431,7 @@
 
   function appendModeHint(baseSub) {
     const b = (baseSub || "").trim();
-    if (!state.pb.mode || state.pb.mode === "file") return b;
+    if (!state.pb.mode || state.pb.mode === "file" || state.pb.mode === "live") return b;
     const hint = state.shuffleEnabled ? "Aleatório" : "Ordem fixa";
     if (!b) return hint;
     if (b.indexOf("Ordem fixa") !== -1 || b.indexOf("Aleatório") !== -1) return b;
@@ -434,6 +601,20 @@
     });
   }
 
+  function startPlaybackLive() {
+    playStream("/radio/live", {
+      title: "Rádio live 24/7",
+      sub: "Emissão contínua · todos ouvem o mesmo sinal",
+      sourceKey: "radio:live",
+      isFile: false,
+      mode: "live",
+      radioStream: true,
+      radioBasePath: "/radio/live",
+      artistName: null,
+      albumName: null,
+    });
+  }
+
   async function startPlaybackArtist(artistName, coverArtist, coverAlbum) {
     const sk = "radio:artist:" + artistName;
     if (state.shuffleEnabled) {
@@ -552,6 +733,13 @@
         "/radio/album/" + encodeURIComponent(a) + "/" + encodeURIComponent(al);
       m.coverArtist = a;
       m.coverAlbum = al;
+    } else if (mode === "live") {
+      m.artistName = null;
+      m.albumName = null;
+      m.title = "Rádio live 24/7";
+      m.sub = "Emissão contínua · todos ouvem o mesmo sinal";
+      m.sourceKey = "radio:live";
+      m.radioBasePath = "/radio/live";
     }
     return m;
   }
@@ -560,6 +748,10 @@
     if (els.loading && !els.loading.classList.contains("hidden")) return;
 
     if (state.pb.radioStream) {
+      if (state.pb.mode === "live" && state.pb.radioBasePath) {
+        playStream("/radio/live", radioReconnectMeta("live"));
+        return;
+      }
       if (state.pb.mode === "random") {
         playStream("/radio/random", radioReconnectMeta("random"));
         return;
@@ -690,6 +882,12 @@
 
   function togglePlayPause() {
     if (!els.audio.src) return;
+    try {
+      wireAudioAnalyser();
+      resumeAudioContextIfNeeded();
+    } catch (e) {
+      /* Web Audio pode falhar em alguns browsers */
+    }
     if (els.audio.paused) {
       els.audio.play().then(function () {
         setPlayingUi(true);
@@ -751,6 +949,7 @@
     mqMobile.addListener(onResizeNav);
   }
   window.addEventListener("resize", onResizeNav);
+  window.addEventListener("resize", onWindowResizeSpectrum);
 
   if (els.main) {
     els.main.addEventListener(
@@ -810,6 +1009,16 @@
   els.audio.volume = 1;
 
   els.audio.addEventListener("play", function () {
+    try {
+      wireAudioAnalyser();
+      resumeAudioContextIfNeeded();
+      if (els.body.classList.contains("page-radio-visual")) {
+        setupSpectrumCanvases();
+        startSpectrumAnimation();
+      }
+    } catch (e) {
+      /* ignorar */
+    }
     setPlayingUi(true);
     syncNowPlayingMini();
   });
@@ -883,6 +1092,7 @@
   }
 
   function renderHome() {
+    exitRadioVisualMode();
     closeDrawer();
     setActiveNav("home");
     setContentLoading(false);
@@ -912,6 +1122,7 @@
   }
 
   async function renderArtists() {
+    exitRadioVisualMode();
     closeDrawer();
     setActiveNav("artists");
     setContentLoading(true);
@@ -955,6 +1166,7 @@
   }
 
   async function renderArtistDetail(artistName) {
+    exitRadioVisualMode();
     closeDrawer();
     setActiveNav("artists");
     setContentLoading(true);
@@ -1053,6 +1265,7 @@
   }
 
   async function renderAlbumDetail(artistName, albumName, backMode) {
+    exitRadioVisualMode();
     closeDrawer();
     backMode = backMode || "albums";
     setActiveNav("albums");
@@ -1136,6 +1349,7 @@
   }
 
   async function renderAlbums() {
+    exitRadioVisualMode();
     closeDrawer();
     setActiveNav("albums");
     setContentLoading(true);
@@ -1215,11 +1429,12 @@
   }
 
   function renderRadioView() {
+    exitRadioVisualMode();
     closeDrawer();
     setActiveNav("radio");
     setContentLoading(false);
-    els.pageTitle.textContent = "Rádio aleatória";
-    els.pageSubtitle.textContent = "Stream contínuo · shuffle";
+    els.pageTitle.textContent = "Random";
+    els.pageSubtitle.textContent = "Stream contínuo · shuffle na biblioteca";
     const active = state.sourceKey === "radio:random";
     els.content.innerHTML =
       '<div class="hero-actions">' +
@@ -1246,11 +1461,64 @@
     };
   }
 
+  function renderRadioVisualView() {
+    closeDrawer();
+    setActiveNav("radio-visual");
+    setContentLoading(false);
+    els.pageTitle.textContent = "Live radio";
+    els.pageSubtitle.textContent = "Espectro sincronizado com o áudio";
+
+    els.content.innerHTML =
+      '<section class="radio-visual-screen">' +
+      '<div class="radio-visual-brand">' +
+      '<span class="radio-visual-logo-dot" aria-hidden="true"></span>' +
+      '<h2 class="radio-visual-title">Radio MIDI</h2>' +
+      '<p class="radio-visual-tagline">Emissão ao vivo · barras de frequência</p>' +
+      "</div>" +
+      '<div class="spectrum-box">' +
+      '<canvas id="spectrum-canvas-main" class="spectrum-canvas" width="640" height="200" aria-hidden="true"></canvas>' +
+      "</div>" +
+      '<div class="hero-actions">' +
+      '<button type="button" class="btn-primary" id="rv-live">▶ Rádio live 24/7</button>' +
+      '<button type="button" class="btn-secondary" id="rv-random">Rádio aleatória</button>' +
+      "</div>" +
+      '<p class="radio-visual-hint" id="rv-hint"></p>' +
+      "</section>";
+
+    const hintEl = document.getElementById("rv-hint");
+    if (hintEl) {
+      hintEl.textContent =
+        "«Rádio live» usa /radio/live (corre também o gerador: python -m app.services.radio_generator). «Rádio aleatória» usa só o FastAPI.";
+    }
+
+    document.getElementById("rv-live").onclick = function () {
+      startPlaybackLive();
+    };
+    document.getElementById("rv-random").onclick = function () {
+      startPlaybackRandom().catch(function (e) {
+        els.playerSub.textContent = escapeHtml(String(e.message || e));
+      });
+    };
+
+    enterRadioVisualMode();
+    setupSpectrumCanvases();
+    try {
+      if (els.audio.getAttribute("src")) {
+        wireAudioAnalyser();
+        resumeAudioContextIfNeeded();
+      }
+    } catch (e) {
+      /* ignorar */
+    }
+    startSpectrumAnimation();
+  }
+
   function navigate(view) {
     if (view === "home") renderHome();
     else if (view === "artists") renderArtists();
     else if (view === "albums") renderAlbums();
     else if (view === "radio") renderRadioView();
+    else if (view === "radio-visual") renderRadioVisualView();
   }
 
   els.navItems.forEach(function (btn) {

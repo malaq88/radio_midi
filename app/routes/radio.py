@@ -5,12 +5,14 @@ Endpoints de streaming contínuo (rádio): aleatório, dispositivo, artista, ál
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import unquote
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from app.config import settings
 from app.deps import get_library
 from app.models.song import Song
 from app.services.library import MusicLibrary
@@ -241,3 +243,71 @@ async def radio_single_file(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get("/live")
+async def radio_live(request: Request) -> StreamingResponse:
+    """
+    Proxy do stream **único** gerado por FFmpeg noutro processo (`app.services.radio_generator`).
+    Vários clientes ouvem o mesmo sinal; quem liga entra a meio (como rádio FM).
+    """
+    url = settings.radio_live_stream_url
+    client = request.client.host if request.client else "?"
+
+    async def proxy_bytes():
+        async with httpx.AsyncClient(timeout=None) as client_http:
+            try:
+                async with client_http.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        yield chunk
+            except httpx.HTTPStatusError as exc:
+                logger.error("Live upstream HTTP %s em %s", exc.response.status_code, url)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Gerador devolveu HTTP {exc.response.status_code}",
+                ) from exc
+            except httpx.RequestError as exc:
+                logger.error("Live indisponível (%s): %s", url, exc)
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Rádio live offline. Na raiz do projeto execute: "
+                        "python -m app.services.radio_generator"
+                    ),
+                ) from exc
+
+    logger.info("Cliente /radio/live desde %s → %s", client, url)
+    return StreamingResponse(proxy_bytes(), media_type="audio/mpeg", headers=_stream_headers())
+
+
+@router.get("/live/status")
+async def radio_live_status() -> dict[str, Any]:
+    """
+    JSON do gerador (faixa estimada, clientes ligados, ciclos FFmpeg, erros).
+    """
+    url = settings.radio_live_status_url
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            r = await http.get(url)
+            r.raise_for_status()
+            raw = r.json()
+            if isinstance(raw, dict):
+                raw["proxied_by"] = "fastapi"
+                return raw
+            return {"ok": True, "proxied_by": "fastapi", "payload": raw}
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "upstream_http", "status": exc.response.status_code, "url": url},
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "upstream_unreachable",
+                "message": str(exc),
+                "url": url,
+                "hint": "python -m app.services.radio_generator",
+            },
+        ) from exc
