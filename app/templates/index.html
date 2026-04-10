@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Radio MIDI</title>
+  <style>
+    :root {
+      --bg: #0c0f14;
+      --surface: #151a22;
+      --surface2: #1c232e;
+      --border: #2a3444;
+      --text: #e8edf4;
+      --muted: #8b98a8;
+      --accent: #3dd6c3;
+      --accent-dim: #2a9d8f;
+      --danger: #e85d75;
+      --radius: 12px;
+      --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(61, 214, 195, 0.12), transparent),
+        radial-gradient(ellipse 60% 40% at 100% 100%, rgba(42, 157, 143, 0.08), transparent);
+    }
+
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+
+    header {
+      margin-bottom: 2rem;
+    }
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.35rem;
+    }
+    header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.35rem 1.5rem;
+      margin-bottom: 1.25rem;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    }
+    .card h2 {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0 0 1rem;
+      font-weight: 600;
+    }
+
+    audio {
+      width: 100%;
+      height: 40px;
+      margin-bottom: 1rem;
+      border-radius: 8px;
+    }
+    audio::-webkit-media-controls-panel {
+      background: var(--surface2);
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      align-items: center;
+    }
+
+    button {
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 0.55rem 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    }
+    button:hover {
+      background: #243040;
+      border-color: var(--accent-dim);
+    }
+    button:active { transform: scale(0.98); }
+    button.primary {
+      background: linear-gradient(145deg, var(--accent-dim), var(--accent));
+      border-color: transparent;
+      color: #061210;
+    }
+    button.primary:hover {
+      filter: brightness(1.08);
+      border-color: transparent;
+    }
+
+    label {
+      font-size: 0.85rem;
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      flex: 1;
+      min-width: 160px;
+    }
+    input[type="text"] {
+      font-family: inherit;
+      font-size: 0.95rem;
+      padding: 0.55rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(61, 214, 195, 0.2);
+    }
+
+    .volume {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .volume span {
+      font-size: 0.85rem;
+      color: var(--muted);
+      min-width: 3.5rem;
+    }
+    input[type="range"] {
+      flex: 1;
+      accent-color: var(--accent);
+      height: 6px;
+    }
+
+    .status {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.75rem;
+      min-height: 1.25rem;
+      word-break: break-all;
+    }
+    .status.error { color: var(--danger); }
+
+    .song-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      max-height: 280px;
+      overflow-y: auto;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .song-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.85rem;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 0.88rem;
+      transition: background 0.12s;
+    }
+    .song-list li:last-child { border-bottom: none; }
+    .song-list li:hover { background: var(--surface2); }
+    .song-list .meta { color: var(--muted); font-size: 0.78rem; }
+    .song-list .title { font-weight: 500; }
+    .empty-list {
+      padding: 1.5rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .badge {
+      font-size: 0.7rem;
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      background: var(--surface2);
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Radio MIDI</h1>
+      <p>Streaming local — rádio contínua ou faixa única</p>
+    </header>
+
+    <section class="card">
+      <h2>Reprodução</h2>
+      <audio id="player" controls preload="none"></audio>
+      <div class="row">
+        <button type="button" class="primary" id="btn-random">Rádio aleatória</button>
+        <button type="button" id="btn-device">Rádio por dispositivo</button>
+      </div>
+      <div class="row" style="margin-top: 0.85rem;">
+        <label>
+          device_id
+          <input type="text" id="device-id" placeholder="ex.: esp32_sala" autocomplete="off" />
+        </label>
+      </div>
+      <div class="volume">
+        <span id="vol-label">Volume</span>
+        <input type="range" id="volume" min="0" max="100" value="100" />
+        <span id="vol-pct">100%</span>
+      </div>
+      <p class="status" id="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card">
+      <h2>Biblioteca <span class="badge" id="song-count">—</span></h2>
+      <ul class="song-list" id="song-list"></ul>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      const audio = document.getElementById("player");
+      const btnRandom = document.getElementById("btn-random");
+      const btnDevice = document.getElementById("btn-device");
+      const deviceInput = document.getElementById("device-id");
+      const volume = document.getElementById("volume");
+      const volPct = document.getElementById("vol-pct");
+      const statusEl = document.getElementById("status");
+      const songList = document.getElementById("song-list");
+      const songCount = document.getElementById("song-count");
+
+      function setStatus(msg, isError) {
+        statusEl.textContent = msg || "";
+        statusEl.classList.toggle("error", !!isError);
+      }
+
+      function streamUrl(path) {
+        const sep = path.includes("?") ? "&" : "?";
+        return path + sep + "t=" + Date.now();
+      }
+
+      function playUrl(url, label) {
+        setStatus("");
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+        audio.src = url;
+        audio.load();
+        setStatus("A carregar: " + label);
+        audio.play().catch(function (err) {
+          setStatus("Reprodução bloqueada ou erro: " + (err && err.message ? err.message : err), true);
+        });
+      }
+
+      audio.addEventListener("playing", function () {
+        setStatus("A reproduzir: " + (audio.src || "").split("/").pop());
+      });
+      audio.addEventListener("error", function () {
+        const err = audio.error;
+        const code = err ? err.code : "?";
+        setStatus("Erro no elemento audio (código " + code + ").", true);
+      });
+
+      btnRandom.addEventListener("click", function () {
+        playUrl(streamUrl("/radio/random"), "/radio/random");
+      });
+
+      btnDevice.addEventListener("click", function () {
+        const id = (deviceInput.value || "").trim();
+        if (!id) {
+          setStatus("Indique um device_id.", true);
+          deviceInput.focus();
+          return;
+        }
+        var path = "/radio/device/" + encodeURIComponent(id);
+        playUrl(streamUrl(path), path);
+      });
+
+      volume.addEventListener("input", function () {
+        var v = Number(volume.value) / 100;
+        audio.volume = v;
+        volPct.textContent = volume.value + "%";
+      });
+      audio.volume = 1;
+
+      function renderSongs(data) {
+        songList.innerHTML = "";
+        songCount.textContent = data.total_songs != null ? data.total_songs : "0";
+        if (!data.songs || !data.songs.length) {
+          var li0 = document.createElement("li");
+          li0.className = "empty-list";
+          li0.style.cursor = "default";
+          li0.textContent = "Sem faixas. Confirme MUSIC_DIR e ficheiros .mp3.";
+          songList.appendChild(li0);
+          return;
+        }
+        data.songs.forEach(function (s) {
+          var li = document.createElement("li");
+          var left = document.createElement("div");
+          var title = document.createElement("div");
+          title.className = "title";
+          title.textContent = s.title || s.filename;
+          var meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = (s.artist ? s.artist + " · " : "") + s.playlist_group + " · " + s.relative_path;
+          left.appendChild(title);
+          left.appendChild(meta);
+          li.appendChild(left);
+          li.addEventListener("click", function () {
+            var q = "relative_path=" + encodeURIComponent(s.relative_path);
+            playUrl("/radio/file?" + q + "&t=" + Date.now(), s.filename);
+          });
+          songList.appendChild(li);
+        });
+      }
+
+      fetch("/songs")
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(renderSongs)
+        .catch(function (e) {
+          songCount.textContent = "!";
+          songList.innerHTML = "";
+          var li = document.createElement("li");
+          li.className = "empty-list";
+          li.textContent = "Não foi possível carregar /songs: " + e.message;
+          songList.appendChild(li);
+        });
+    })();
+  </script>
+</body>
+</html>
